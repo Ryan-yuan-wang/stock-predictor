@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Stock Predictor 15-Day Forecast
  * Uses historical price data + linear regression to predict 15-day price movement.
  */
@@ -12,74 +12,70 @@ const HISTORY_DAYS = 90;           // 取90天历史数据用于回归
 const MIN_DATA_POINTS = 20;        // 最少需要的数据点
 
 const STOCKS = [
-  { ticker: 'AAPL',   name: '苹果' },
-  { ticker: 'MSFT',   name: '微软' },
-  { ticker: 'GOOGL',  name: 'Alphabet' },
-  { ticker: 'AMZN',   name: '亚马逊' },
-  { ticker: 'TSLA',   name: '特斯拉' },
-  { ticker: 'NVDA',   name: '英伟达' },
-  { ticker: 'META',   name: 'Meta' },
-  { ticker: 'BABA',   name: '阿里巴巴' },
-  { ticker: 'JPM',    name: '摩根大通' },
-  { ticker: 'V',      name: 'Visa' },
-  { ticker: 'AMD',    name: 'AMD' },
-  { ticker: 'CRM',    name: 'Salesforce' },
+  { ticker: '600519.SS', name: '贵州茅台' },
+  { ticker: '300750.SZ', name: '宁德时代' },
+  { ticker: '601318.SS', name: '中国平安' },
+  { ticker: '600036.SS', name: '招商银行' },
+  { ticker: '000858.SZ', name: '五粮液' },
+  { ticker: '002594.SZ', name: '比亚迪' },
+  { ticker: '000333.SZ', name: '美的集团' },
+  { ticker: '300059.SZ', name: '东方财富' },
+  { ticker: '002415.SZ', name: '海康威视' },
+  { ticker: '601012.SS', name: '隆基绿能' },
+  { ticker: '603259.SS', name: '药明康德' },
+  { ticker: '600887.SS', name: '伊利股份' },
 ];
 
 const SEARCH_INDEX = [
-  { ticker: 'AAPL',   name: '苹果 / Apple Inc.' },
-  { ticker: 'MSFT',   name: '微软 / Microsoft Corp.' },
-  { ticker: 'GOOGL',  name: 'Google / Alphabet Inc.' },
-  { ticker: 'AMZN',   name: '亚马逊 / Amazon.com Inc.' },
-  { ticker: 'TSLA',   name: '特斯拉 / Tesla Inc.' },
-  { ticker: 'NVDA',   name: '英伟达 / NVIDIA Corp.' },
-  { ticker: 'META',   name: 'Meta Platforms Inc.' },
-  { ticker: 'BABA',   name: '阿里巴巴 / Alibaba Group' },
-  { ticker: 'JPM',    name: '摩根大通 / JPMorgan Chase' },
-  { ticker: 'V',      name: 'Visa Inc.' },
-  { ticker: 'AMD',    name: 'AMD / Advanced Micro Devices' },
-  { ticker: 'CRM',    name: 'Salesforce Inc.' },
-  { ticker: 'NFLX',   name: '奈飞 / Netflix Inc.' },
-  { ticker: 'DIS',    name: '迪士尼 / Walt Disney Co.' },
-  { ticker: 'PYPL',   name: 'PayPal Holdings Inc.' },
-  { ticker: 'ADBE',   name: 'Adobe Inc.' },
-  { ticker: 'INTC',   name: '英特尔 / Intel Corp.' },
-  { ticker: 'CSCO',   name: '思科 / Cisco Systems' },
-  { ticker: 'QCOM',   name: '高通 / Qualcomm Inc.' },
-  { ticker: 'KO',     name: '可口可乐 / Coca-Cola Co.' },
-  { ticker: 'PEP',    name: '百事 / PepsiCo Inc.' },
-  { ticker: 'WMT',    name: '沃尔玛 / Walmart Inc.' },
-  { ticker: 'XOM',    name: '埃克森美孚 / Exxon Mobil' },
-  { ticker: 'JNJ',    name: '强生 / Johnson & Johnson' },
-  { ticker: 'PG',     name: '宝洁 / Procter & Gamble' },
-  { ticker: 'MA',     name: 'Mastercard Inc.' },
-  { ticker: 'HD',     name: '家得宝 / Home Depot Inc.' },
-  { ticker: 'BAC',    name: '美国银行 / Bank of America' },
-  { ticker: 'ORCL',   name: '甲骨文 / Oracle Corp.' },
-  { ticker: 'UBER',   name: 'Uber Technologies Inc.' },
-  { ticker: 'SAP',    name: 'SAP SE (ADR)' },
-  { ticker: 'TSM',    name: '台积电 / TSMC (ADR)' },
-  { ticker: 'SPOT',   name: 'Spotify Technology' },
-  { ticker: 'SQ',     name: 'Block / Square Inc.' },
-  { ticker: 'SHOP',   name: 'Shopify Inc.' },
-  { ticker: 'SNAP',   name: 'Snap Inc.' },
-  { ticker: 'PLTR',   name: 'Palantir Technologies' },
-  { ticker: 'COIN',   name: 'Coinbase Global Inc.' },
-  { ticker: 'MCD',    name: '麦当劳 / McDonald\'s Corp.' },
-  { ticker: 'NKE',    name: '耐克 / Nike Inc.' },
-  { ticker: 'SBUX',   name: '星巴克 / Starbucks Corp.' },
-  { ticker: 'BA',     name: '波音 / Boeing Co.' },
-  { ticker: 'GE',     name: '通用电气 / GE Aerospace' },
-  { ticker: 'IBM',    name: 'IBM Corp.' },
-  { ticker: 'T',      name: 'AT&T Inc.' },
-  { ticker: 'VZ',     name: 'Verizon Communications' },
-  { ticker: 'RIVN',   name: 'Rivian Automotive' },
-  { ticker: 'LCID',   name: 'Lucid Group Inc.' },
-  { ticker: 'ABNB',   name: 'Airbnb Inc.' },
-  { ticker: 'DASH',   name: 'DoorDash Inc.' },
-  { ticker: 'ARM',    name: 'Arm Holdings (ADR)' },
-  { ticker: 'MRVL',   name: 'Marvell Technology' },
-  { ticker: 'MRNA',   name: 'Moderna Inc.' },
+  { ticker: '600519.SS', name: '贵州茅台 / Kweichow Moutai' },
+  { ticker: '300750.SZ', name: '宁德时代 / CATL' },
+  { ticker: '601318.SS', name: '中国平安 / Ping An Insurance' },
+  { ticker: '600036.SS', name: '招商银行 / China Merchants Bank' },
+  { ticker: '000858.SZ', name: '五粮液 / Wuliangye' },
+  { ticker: '002594.SZ', name: '比亚迪 / BYD Co.' },
+  { ticker: '000333.SZ', name: '美的集团 / Midea Group' },
+  { ticker: '300059.SZ', name: '东方财富 / East Money Info' },
+  { ticker: '002415.SZ', name: '海康威视 / Hikvision' },
+  { ticker: '601012.SS', name: '隆基绿能 / LONGi Green Energy' },
+  { ticker: '603259.SS', name: '药明康德 / WuXi AppTec' },
+  { ticker: '600887.SS', name: '伊利股份 / Yili Group' },
+  { ticker: '600030.SS', name: '中信证券 / CITIC Securities' },
+  { ticker: '601166.SS', name: '兴业银行 / Industrial Bank' },
+  { ticker: '600900.SS', name: '长江电力 / Yangtze Power' },
+  { ticker: '600585.SS', name: '海螺水泥 / Conch Cement' },
+  { ticker: '601398.SS', name: '工商银行 / ICBC' },
+  { ticker: '601939.SS', name: '建设银行 / CCB' },
+  { ticker: '600276.SS', name: '恒瑞医药 / Hengrui Medicine' },
+  { ticker: '600309.SS', name: '万华化学 / Wanhua Chemical' },
+  { ticker: '600809.SS', name: '山西汾酒 / Shanxi Fenjiu' },
+  { ticker: '600031.SS', name: '三一重工 / SANY Heavy' },
+  { ticker: '600438.SS', name: '通威股份 / Tongwei Co.' },
+  { ticker: '601088.SS', name: '中国神华 / China Shenhua' },
+  { ticker: '600028.SS', name: '中国石化 / Sinopec' },
+  { ticker: '601857.SS', name: '中国石油 / PetroChina' },
+  { ticker: '600941.SS', name: '中国移动 / China Mobile' },
+  { ticker: '000651.SZ', name: '格力电器 / Gree Electric' },
+  { ticker: '000002.SZ', name: '万科A / Vanke' },
+  { ticker: '300760.SZ', name: '迈瑞医疗 / Mindray Medical' },
+  { ticker: '002714.SZ', name: '牧原股份 / Muyuan Foods' },
+  { ticker: '002475.SZ', name: '立讯精密 / Luxshare Precision' },
+  { ticker: '000568.SZ', name: '泸州老窖 / Luzhou Laojiao' },
+  { ticker: '300124.SZ', name: '汇川技术 / Inovance Tech' },
+  { ticker: '002304.SZ', name: '洋河股份 / Yanghe Brewery' },
+  { ticker: '000001.SZ', name: '平安银行 / Ping An Bank' },
+  { ticker: '002230.SZ', name: '科大讯飞 / iFlytek' },
+  { ticker: '300015.SZ', name: '爱尔眼科 / Aier Eye Hospital' },
+  { ticker: '002352.SZ', name: '顺丰控股 / SF Holding' },
+  { ticker: '300274.SZ', name: '阳光电源 / Sungrow Power' },
+  { ticker: '000725.SZ', name: '京东方A / BOE Tech' },
+  { ticker: '300498.SZ', name: '温氏股份 / Wens Foodstuff' },
+  { ticker: '002459.SZ', name: '晶澳科技 / JA Solar Tech' },
+  { ticker: '300124.SZ', name: '汇川技术 / Inovance Tech' },
+  { ticker: '688981.SH', name: '中芯国际 / SMIC' },
+  { ticker: '000063.SZ', name: '中兴通讯 / ZTE Corp.' },
+  { ticker: '002129.SZ', name: '中环股份 / Zhonghuan Semi' },
+  { ticker: '600690.SS', name: '海尔智家 / Haier Smart' },
+  { ticker: '002555.SZ', name: '三七互娱 / 37 Interactive' },
 ];
 
 /* ============================================================
@@ -228,17 +224,24 @@ async function fetchStockData(ticker) {
 
 function generateFallbackData(ticker) {
   const basePrices = {
-    AAPL: 188, MSFT: 405, GOOGL: 175, AMZN: 185, TSLA: 240,
-    NVDA: 120, META: 500, BABA: 82, JPM: 200, V: 275,
-    AMD: 160, CRM: 260, NFLX: 640, DIS: 105, PYPL: 68,
-    ADBE: 530, INTC: 38, CSCO: 52, QCOM: 200, KO: 65,
-    PEP: 178, WMT: 170, XOM: 118, JNJ: 158, PG: 170,
-    MA: 460, HD: 360, BAC: 38, ORCL: 135, UBER: 72,
-    SAP: 195, TSM: 150, SPOT: 310, SQ: 78, SHOP: 72,
-    SNAP: 14, PLTR: 25, COIN: 230, MCD: 295, NKE: 85,
-    SBUX: 85, BA: 195, GE: 170, IBM: 185, T: 19,
-    VZ: 42, RIVN: 14, LCID: 3.5, ABNB: 155, DASH: 130,
-    ARM: 140, MRVL: 75, MRNA: 100,
+    '600519.SS': 1500, '300750.SZ': 180, '601318.SS': 50,
+    '600036.SS': 35, '000858.SZ': 130, '002594.SZ': 260,
+    '000333.SZ': 65, '300059.SZ': 12, '002415.SZ': 32,
+    '601012.SS': 18, '603259.SS': 48, '600887.SS': 28,
+    '600030.SS': 20, '601166.SS': 18, '600900.SS': 25,
+    '600585.SS': 25, '601398.SS': 6, '601939.SS': 7,
+    '600276.SS': 42, '600309.SS': 85, '600809.SS': 220,
+    '600031.SS': 16, '600438.SS': 18, '601088.SS': 40,
+    '600028.SS': 6, '601857.SS': 10, '600941.SS': 100,
+    '000651.SZ': 40, '000002.SZ': 8, '300760.SZ': 280,
+    '002714.SZ': 45, '002475.SZ': 30, '000568.SZ': 180,
+    '300124.SZ': 60, '002304.SZ': 85, '000001.SZ': 11,
+    '002230.SZ': 45, '300015.SZ': 12, '002352.SZ': 38,
+    '300274.SZ': 70, '000725.SZ': 4, '300498.SZ': 18,
+    '002459.SZ': 15, '688981.SH': 55, '000063.SZ': 28,
+    '600690.SS': 28, '002555.SZ': 22, '002129.SZ': 20,
+    '002230.SZ': 45, '002304.SZ': 85, '000568.SZ': 180,
+  };
   };
 
   const base = basePrices[ticker] || 100;
@@ -363,14 +366,14 @@ function renderCards() {
         </div>
         <div class="card-body">
           <div class="price-section">
-            <div class="current-price">$${formatPrice(pred.currentPrice)}</div>
+            <div class="current-price">¥${formatPrice(pred.currentPrice)}</div>
             <div class="current-change ${trendCls === 'neutral' ? '' : trendCls}">
               ${trendCls === 'up' ? '▲' : trendCls === 'down' ? '▼' : '―'} ${todayChangePct}
             </div>
           </div>
           <div class="prediction-section">
             <div class="prediction-label">15天后预测</div>
-            <div class="predicted-price">$${formatPrice(pred.predictedPrice)}</div>
+            <div class="predicted-price">¥${formatPrice(pred.predictedPrice)}</div>
             <div class="predicted-change ${trendCls}">
               ${formatPercent(pred.changePercent)}
             </div>
@@ -458,8 +461,8 @@ function openDetail(ticker) {
   const trendCls = getTrendClass(pred.changePercent);
 
   document.getElementById('modalTitle').innerHTML = `${info.name} <span class="ticker">(${ticker})</span>`;
-  document.getElementById('modalCurrentPrice').textContent = `$${formatPrice(pred.currentPrice)}`;
-  document.getElementById('modalPredictedPrice').textContent = `$${formatPrice(pred.predictedPrice)}`;
+  document.getElementById('modalCurrentPrice').textContent = `¥${formatPrice(pred.currentPrice)}`;
+  document.getElementById('modalPredictedPrice').textContent = `¥${formatPrice(pred.predictedPrice)}`;
   document.getElementById('modalChange').textContent = formatPercent(pred.changePercent);
   document.getElementById('modalChange').className = `stat-value ${trendCls}`;
   document.getElementById('modalConfidence').textContent = `${pred.confidence}% (${conf.label})`;
@@ -595,7 +598,7 @@ function renderChart(data, pred, ticker, name) {
           ticks: {
             color: '#5a6778',
             font: { size: 11 },
-            callback: v => '$' + v.toFixed(0),
+            callback: v => '¥' + v.toFixed(0),
           },
           grid: {
             color: 'rgba(42, 51, 64, 0.3)',
