@@ -171,23 +171,35 @@ function predictPrice(prices, days = PREDICTION_DAYS) {
    DATA FETCHING (Yahoo Finance)
    ============================================================ */
 
+// Fetch with timeout to prevent hanging on CORS-blocked requests
+async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchStockData(ticker) {
   const now = Math.floor(Date.now() / 1000);
-  const past = now - HISTORY_DAYS * 86400 * 1.5; // ~135 days buffer
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
+  const past = now - HISTORY_DAYS * 86400 * 1.5;
+  const url = https://query1.finance.yahoo.com/v8/finance/chart/ + ticker + ?period1= + past + &period2= + now + &interval=1d;
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
   });
 
   if (!response.ok) {
-    throw new Error(`Yahoo Finance returned ${response.status} for ${ticker}`);
+    throw new Error(Yahoo Finance returned  + response.status +  for  + ticker);
   }
 
   const json = await response.json();
   const result = json.chart?.result?.[0];
   if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
-    throw new Error(`No data returned for ${ticker}`);
+    throw new Error(No data returned for  + ticker);
   }
 
   const timestamps = result.timestamp;
@@ -206,7 +218,6 @@ async function fetchStockData(ticker) {
     }
   }
 
-  // Calculate daily change for current day
   const dailyChanges = [];
   for (let i = 1; i < prices.length; i++) {
     dailyChanges.push({
@@ -242,7 +253,6 @@ function generateFallbackData(ticker) {
     '600690.SS': 28, '002555.SZ': 22, '002129.SZ': 20,
     '002230.SZ': 45, '002304.SZ': 85, '000568.SZ': 180,
   };
-  };
 
   const base = basePrices[ticker] || 100;
   const prices = [];
@@ -277,6 +287,21 @@ function generateFallbackData(ticker) {
    ============================================================ */
 
 async function loadAndPredict(ticker, stockInfo) {
+  // Skip API call if running locally (file:// protocol)
+  if (window.location.protocol === 'file:') {
+    console.log('Local mode detected, using simulated data');
+    const fallbackData = generateFallbackData(ticker);
+    stockDataMap.set(ticker, fallbackData);
+    const localPred = predictPrice(fallbackData.prices);
+    if (localPred) {
+      localPred.ticker = ticker;
+      localPred.stockName = stockInfo?.name || ticker;
+      localPred.targetDate = new Date();
+      localPred.targetDate.setDate(localPred.targetDate.getDate() + PREDICTION_DAYS);
+      predictions.set(ticker, localPred);
+    }
+    return { data: fallbackData, prediction: localPred };
+  }
   let data;
   try {
     data = await fetchStockData(ticker);
