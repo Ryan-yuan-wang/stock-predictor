@@ -41,13 +41,22 @@ function saveCachedData(ticker, data) {
 function loadCachedTickers() {
   try {
     const raw = localStorage.getItem(CACHE_PREFIX + 'tickers');
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+      return parsed.map(t => ({ ticker: t, name: t }));
+    }
+    return parsed;
   } catch (_) { return null; }
 }
 
 function saveCachedTickers(tickers) {
   try {
-    localStorage.setItem(CACHE_PREFIX + 'tickers', JSON.stringify(tickers));
+    const entries = tickers.map(t => {
+      const info = STOCKS.find(s => s.ticker === t);
+      return info ? { ticker: info.ticker, name: info.name } : { ticker: t, name: t };
+    });
+    localStorage.setItem(CACHE_PREFIX + 'tickers', JSON.stringify(entries));
   } catch (_) { /* ignore */ }
 }
 
@@ -348,11 +357,34 @@ function predictPrice(data) {
   const volBias = volTrend * 0.015;
 
   // --- Combine signals ---
-  // Base prediction from regression
   const trendFactor = trendScore * 0.02;
   const momentumFactor = momentum * 0.25;
-  const combinedReturn = trendFactor + momentumFactor + rsiBias + macdBias + bollingerBias + volBias;
-  const predictedPrice = regressionPrediction * (1 + combinedReturn);
+
+  // Adaptive blend of 3 models based on market regime:
+  const regTrend = trendFactor + momentumFactor;
+  const regPrediction = regressionPrediction * (1 + regTrend);                // Model 1: Trend regression
+  const momPrediction = currentPrice * (1 + momentum * PREDICTION_DAYS);      // Model 2: Momentum
+  const revPullback = (currentPrice - curMA20) / curMA20;
+  const revPrediction = currentPrice - revPullback * currentPrice * 0.4;      // Model 3: Mean reversion
+
+  // Weights adapt to market conditions
+  const trendStrength = Math.min(Math.abs(trendScore), 2);
+  const revStrength = Math.min(Math.abs(revPullback) * 2.5, 1.0);
+  const rsiExtreme = curRSI > 70 || curRSI < 30 ? 0.2 : 0;
+  const bollingerExtreme = Math.abs(bollingerPos) > 0.8 ? 0.2 : 0;
+
+  let wT = 0.3 + trendStrength * 0.2;          // 0.3-0.7: trending = more regression
+  let wR = revStrength * 0.4 + rsiExtreme + bollingerExtreme; // 0-0.7: extreme = more reversion
+  wR = Math.min(wR, 0.7);
+  let wM = Math.max(0.05, 1.0 - wT - wR);
+  const total = wT + wR + wM;
+
+  const predictedPrice = (wT / total) * regPrediction +
+                         (wM / total) * momPrediction +
+                         (wR / total) * revPrediction;
+
+  // Derived from blend for path/risk calculations
+  const combinedReturn = (predictedPrice - currentPrice) / currentPrice;
 
   // --- Confidence score (0-95) ---
   // R-squared of regression
@@ -789,7 +821,10 @@ function renderCards() {
   const stockInfos = new Map(STOCKS.map(s => [s.ticker, s]));
 
   grid.innerHTML = activeTickers.map((ticker, idx) => {
-    const info = stockInfos.get(ticker) || { ticker, name: ticker };
+    const info = stockInfos.get(ticker) || (() => {
+      const si = SEARCH_INDEX.find(s => s.ticker === ticker);
+      return { ticker, name: si ? (si.name.split(' / ')[0] || si.name) : ticker };
+    })();
     const pred = predictions.get(ticker);
 
     if (!pred) {
@@ -1170,7 +1205,7 @@ function initSearch() {
       return `
         <div class="suggestion-item ${alreadyAdded ? 'disabled' : ''}"
              data-ticker="${s.ticker}"
-             onclick="addStock('${s.ticker}')">
+             onclick="addStock('${s.ticker}', '${(s.name.split(' / ')[0] || s.name)}')">
           <span class="ticker">${s.ticker}</span>
           <span class="name">${s.name} ${alreadyAdded ? '(已添加)' : ''}</span>
         </div>
@@ -1193,10 +1228,9 @@ function initSearch() {
   });
 }
 
-function addStock(ticker) {
+function addStock(ticker, stockName) {
   if (activeTickers.includes(ticker)) return;
-  const exists = SEARCH_INDEX.find(s => s.ticker === ticker);
-  if (!exists) return;
+  if (!stockName) { const exists = SEARCH_INDEX.find(s => s.ticker === ticker); if (!exists) return; stockName = exists.name.split(' / ')[0] || ticker; }
 
   activeTickers.push(ticker);
   saveCachedTickers(activeTickers);
@@ -1205,7 +1239,7 @@ function addStock(ticker) {
 
   // Add to STOCKS list if not there
   if (!STOCKS.find(s => s.ticker === ticker)) {
-    STOCKS.push({ ticker, name: exists.name.split(' / ')[0] || ticker });
+    STOCKS.push({ ticker, name: stockName });
   }
 
   // Load data immediately
@@ -1237,7 +1271,14 @@ function removeStock(ticker) {
 document.addEventListener('DOMContentLoaded', () => {
   const savedTickers = loadCachedTickers();
   if (savedTickers && savedTickers.length > 0) {
-    activeTickers = savedTickers;
+    savedTickers.forEach(s => {
+      if (!STOCKS.find(st => st.ticker === s.ticker)) {
+        const si = SEARCH_INDEX.find(si => si.ticker === s.ticker);
+        const dn = si ? (si.name.split(' / ')[0] || si.name) : s.name;
+        STOCKS.push({ ticker: s.ticker, name: dn });
+      }
+    });
+    activeTickers = savedTickers.map(s => s.ticker);
   }
   initSearch();
   renderCards();
@@ -1273,3 +1314,4 @@ window.closeDetail = closeDetail;
 window.toggleCompare = toggleCompare;
 window.openCompare = openCompare;
 window.closeCompare = closeCompare;
+
