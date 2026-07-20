@@ -186,20 +186,20 @@ async function fetchWithTimeout(url, options = {}, timeout = 5000) {
 async function fetchStockData(ticker) {
   const now = Math.floor(Date.now() / 1000);
   const past = now - HISTORY_DAYS * 86400 * 1.5;
-  const url = https://query1.finance.yahoo.com/v8/finance/chart/ + ticker + ?period1= + past + &period2= + now + &interval=1d;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
 
   const response = await fetchWithTimeout(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
   });
 
   if (!response.ok) {
-    throw new Error(Yahoo Finance returned  + response.status +  for  + ticker);
+    throw new Error(`Yahoo Finance returned ${response.status} for ${ticker}`);
   }
 
   const json = await response.json();
   const result = json.chart?.result?.[0];
   if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
-    throw new Error(No data returned for  + ticker);
+    throw new Error(`No data returned for ${ticker}`);
   }
 
   const timestamps = result.timestamp;
