@@ -7,6 +7,7 @@
   <meta name="description" content="基于历史数据的股票15日涨幅预测工具">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style-compare.css">
 </head>
 <body>
 
@@ -53,6 +54,13 @@
     </div>
   </div>
 
+  <!-- Compare badge -->
+  <div class="compare-badge" id="compareBadge">
+    <span>已选择 <span class="badge-tickers" id="compareTickers"></span></span>
+    <button class="btn btn-primary" id="compareBtn">查看对比</button>
+    <button class="btn" id="compareClearBtn">取消</button>
+  </div>
+
   <!-- Footer -->
   <footer class="app-footer">
     <p>
@@ -79,12 +87,24 @@
         <div class="stat-value" id="modalCurrentPrice">--</div>
       </div>
       <div class="modal-stat">
+        <div class="stat-label">明日预测</div>
+        <div class="stat-value" id="modalPred1d">--</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-label">5日预测</div>
+        <div class="stat-value" id="modalPred5d">--</div>
+      </div>
+      <div class="modal-stat">
         <div class="stat-label">15日预测</div>
         <div class="stat-value" id="modalPredictedPrice">--</div>
       </div>
       <div class="modal-stat">
         <div class="stat-label">预测涨跌幅</div>
         <div class="stat-value" id="modalChange">--</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-label">上涨概率</div>
+        <div class="stat-value" id="modalProbUp">--</div>
       </div>
       <div class="modal-stat">
         <div class="stat-label">可信度</div>
@@ -94,10 +114,48 @@
         <div class="stat-label">年化波动率</div>
         <div class="stat-value" id="modalVolatility">--</div>
       </div>
+      <div class="modal-stat">
+        <div class="stat-label">最大回撤</div>
+        <div class="stat-value" id="modalMaxDrawdown">--</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-label">夏普比率</div>
+        <div class="stat-value" id="modalSharpe">--</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-label">风险价值 VaR</div>
+        <div class="stat-value" id="modalVaR">--</div>
+      </div>
     </div>
 
     <div class="chart-wrapper">
       <canvas id="stockChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- === COMPARE OVERLAY === -->
+<div class="compare-overlay" id="compareOverlay">
+  <div class="compare-content">
+    <button class="compare-close" id="compareCloseBtn">&#10005;</button>
+    <div class="compare-title">股票对比分析</div>
+    <div class="compare-grid" id="compareGrid">
+      <div class="compare-col" id="compareCol1">
+        <div class="compare-col-header">
+          <div class="c-name" id="c1Name">--</div>
+          <div class="c-ticker" id="c1Ticker">--</div>
+          <div class="c-price" id="c1Price">--</div>
+        </div>
+        <div id="c1Metrics"></div>
+      </div>
+      <div class="compare-col" id="compareCol2">
+        <div class="compare-col-header">
+          <div class="c-name" id="c2Name">--</div>
+          <div class="c-ticker" id="c2Ticker">--</div>
+          <div class="c-price" id="c2Price">--</div>
+        </div>
+        <div id="c2Metrics"></div>
+      </div>
     </div>
   </div>
 </div>

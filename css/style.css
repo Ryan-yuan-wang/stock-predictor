@@ -634,6 +634,40 @@ body {
   margin-bottom: 8px;
 }
 
+/* === Skeleton Loading === */
+.sk {
+  background: linear-gradient(90deg, var(--bg-card-hover) 25%, #2a3340 50%, var(--bg-card-hover) 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.6s ease infinite;
+  border-radius: 4px;
+}
+
+.sk-card { pointer-events: none; }
+
+.sk-line { height: 12px; }
+.sk-name { width: 55%; height: 16px; }
+.sk-tick { width: 50px; height: 18px; border-radius: 4px; }
+.sk-lg { height: 28px; width: 45%; }
+.sk-md { height: 20px; width: 55%; }
+.sk-sm { height: 12px; width: 35%; }
+.sk-xs { height: 10px; width: 25%; }
+.sk-bar { height: 5px; width: 75%; }
+
+.sk-block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.price-sk { align-items: flex-start; }
+.pred-sk { align-items: flex-end; }
+
+@keyframes sk-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* === Animations === */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

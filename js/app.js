@@ -11,6 +11,46 @@ const PREDICTION_DAYS = 15;        // 半个月 = 15天
 const HISTORY_DAYS = 90;           // 取90天历史数据用于回归
 const MIN_DATA_POINTS = 20;        // 最少需要的数据点
 
+/* ============================================================
+   CACHE (localStorage)
+   ============================================================ */
+
+const CACHE_PREFIX = 'stock_pred_';
+
+function getTodayDate() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function loadCachedData(ticker) {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + ticker);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (cached.date !== getTodayDate()) return null;
+    return cached.data;
+  } catch (_) { return null; }
+}
+
+function saveCachedData(ticker, data) {
+  try {
+    localStorage.setItem(CACHE_PREFIX + ticker, JSON.stringify({ date: getTodayDate(), data }));
+  } catch (_) { /* localStorage full, ignore */ }
+}
+
+function loadCachedTickers() {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + 'tickers');
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+
+function saveCachedTickers(tickers) {
+  try {
+    localStorage.setItem(CACHE_PREFIX + 'tickers', JSON.stringify(tickers));
+  } catch (_) { /* ignore */ }
+}
+
 const STOCKS = [
   { ticker: '600519.SS', name: '贵州茅台' },
   { ticker: '300750.SZ', name: '宁德时代' },
@@ -87,47 +127,235 @@ let predictions = new Map();        // ticker -> { predictedPrice, change, confi
 let activeTickers = [...STOCKS.map(s => s.ticker)];
 let chartInstance = null;
 let isRefreshing = false;
+let compareList = [];
 
 /* ============================================================
    PREDICTION ENGINE (Linear Regression + Momentum)
    ============================================================ */
 
-function predictPrice(prices, days = PREDICTION_DAYS) {
+/* ============================================================
+   TECHNICAL ANALYSIS HELPERS
+   ============================================================ */
+
+// Deterministic hash from ticker string
+function hashTicker(ticker) {
+  let hash = 0;
+  for (let i = 0; i < ticker.length; i++) {
+    hash = ((hash << 5) - hash) + ticker.charCodeAt(i);
+    hash = hash & hash;
+  }
+  return Math.abs(hash) || 1;
+}
+
+// Seeded PRNG (Linear Congruential Generator)
+function seededRandom(seed) {
+  let x = (seed * 16807) % 2147483647;
+  return x / 2147483647;
+}
+
+// Update a running PRNG state and return a value
+function nextRandom(state) {
+  let x = (state * 16807) % 2147483647;
+  return { value: x / 2147483647, state: x };
+}
+
+// Simple Moving Average
+function calcSMA(prices, period) {
+  const result = [];
+  for (let i = period - 1; i < prices.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < period; j++) sum += prices[i - j];
+    result.push(sum / period);
+  }
+  return result;
+}
+
+// Exponential Moving Average
+function calcEMA(prices, period) {
+  const mult = 2 / (period + 1);
+  const result = [prices[0]];
+  for (let i = 1; i < prices.length; i++) {
+    result.push((prices[i] - result[i - 1]) * mult + result[i - 1]);
+  }
+  return result;
+}
+
+// RSI (Relative Strength Index)
+function calcRSI(prices, period = 14) {
+  const changes = [];
+  for (let i = 1; i < prices.length; i++) changes.push(prices[i] - prices[i - 1]);
+  const result = [];
+  for (let i = period; i < changes.length; i++) {
+    let gain = 0, loss = 0;
+    for (let j = i - period; j < i; j++) {
+      if (changes[j] > 0) gain += changes[j];
+      else loss -= changes[j];
+    }
+    const avgGain = gain / period;
+    const avgLoss = loss / period;
+    if (avgLoss === 0) result.push(100);
+    else result.push(100 - 100 / (1 + avgGain / avgLoss));
+  }
+  return result;
+}
+
+// MACD
+function calcMACD(prices) {
+  const ema12 = calcEMA(prices, 12);
+  const ema26 = calcEMA(prices, 26);
+  const offset = ema12.length - ema26.length;
+  const macdLine = [];
+  for (let i = 0; i < ema26.length; i++) {
+    macdLine.push(ema12[offset + i] - ema26[i]);
+  }
+  const signal = calcEMA(macdLine, 9);
+  const histogram = macdLine.map((v, i) => v - (signal[i] || 0));
+  return { macdLine, signal, histogram };
+}
+
+/* ============================================================
+   PREDICTION ENGINE
+   ============================================================ */
+
+// Bollinger Bands: returns position of last price within bands (-1 to +1)
+function calcBollingerPosition(prices, period = 20) {
+  if (prices.length < period) return 0;
+  const y = prices.slice(-period);
+  const mean = y.reduce((a, b) => a + b, 0) / period;
+  const stdDev = Math.sqrt(y.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
+  if (stdDev === 0) return 0;
+  const lastPrice = prices[prices.length - 1];
+  const position = (lastPrice - mean) / (2 * stdDev);
+  return Math.max(-1, Math.min(1, position));
+}
+
+// ATR: Average True Range for better risk estimation
+function calcATR(highs, lows, closes, period = 14) {
+  if (closes.length < 2) return 0;
+  const tr = [];
+  for (let i = 1; i < closes.length; i++) {
+    const h = highs[i] || closes[i];
+    const l = lows[i] || closes[i];
+    const pc = closes[i - 1];
+    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  if (tr.length < period) return tr.reduce((a, b) => a + b, 0) / tr.length;
+  const recent = tr.slice(-period);
+  return recent.reduce((a, b) => a + b, 0) / period;
+}
+
+// Volume Trend: volume confirmation signal (-1 to +1)
+function calcVolumeTrend(prices, volumes) {
+  if (!volumes || volumes.length < 10) return 0;
+  const recent = Math.min(20, prices.length - 1);
+  let upVol = 0, downVol = 0, upCount = 0, downCount = 0;
+  for (let i = prices.length - recent; i < prices.length; i++) {
+    if (volumes[i] <= 0) continue;
+    if (prices[i] > prices[i - 1]) { upVol += volumes[i]; upCount++; }
+    else { downVol += volumes[i]; downCount++; }
+  }
+  if (upCount === 0 || downCount === 0) return 0;
+  const ratio = (upVol / upCount) / (downVol / downCount);
+  return Math.max(-1, Math.min(1, (ratio - 1) * 2));
+}
+
+// Helper: calculate prediction for a given timeframe (in trading days)
+function calcTimeframePrediction(currentPrice, slope, intercept, window, combinedReturn, days) {
+  const regressionPrice = slope * (window - 1 + days) + intercept;
+  const predictedPrice = regressionPrice * (1 + combinedReturn);
+  const change = predictedPrice - currentPrice;
+  const changePercent = (change / currentPrice) * 100;
+  return { price: predictedPrice, change, changePercent };
+}
+
+// Helper: estimate probability of price increase using multiple indicators
+function calcProbabilityUp(rsiVal, trendScore, macdHist, momentumVal, slopeVal) {
+  const rsiScore = rsiVal < 30 ? 70 : rsiVal > 70 ? 30 : 55 - (rsiVal - 50) * 0.8;
+  const trendScore2 = trendScore > 0.5 ? 65 : trendScore < -0.5 ? 35 : 50;
+  const macdScore = macdHist > 0 ? 60 : 40;
+  const momScore = momentumVal > 0 ? 60 : 40;
+  const regScore = slopeVal > 0 ? 60 : 40;
+  return Math.min(Math.max((rsiScore + trendScore2 + macdScore + momScore + regScore) / 5, 5), 95);
+}
+
+function predictPrice(data) {
+  const prices = Array.isArray(data) ? data : data.prices;
+  const opens = data.opens || prices;
+  const highs = data.highs || prices;
+  const lows = data.lows || prices;
+  const volumes = data.volumes || [];
   const n = prices.length;
   if (n < MIN_DATA_POINTS) return null;
 
-  // Use last 60 points max for regression
+  const currentPrice = prices[n - 1];
   const window = Math.min(n, 60);
   const y = prices.slice(n - window);
   const x = Array.from({ length: window }, (_, i) => i);
+  const y_highs = highs.slice(n - window);
+  const y_lows = lows.slice(n - window);
 
-  // Weight: exponential — more weight on recent days
+  // --- Weighted Linear Regression ---
   const weights = x.map(i => Math.pow(0.97, window - 1 - i));
-
-  // Weighted linear regression
   const sumW = weights.reduce((a, b) => a + b, 0);
   const sumWX = x.reduce((s, xi, i) => s + xi * weights[i], 0);
   const sumWY = y.reduce((s, yi, i) => s + yi * weights[i], 0);
   const sumWXY = x.reduce((s, xi, i) => s + xi * y[i] * weights[i], 0);
   const sumWXX = x.reduce((s, xi, i) => s + xi * xi * weights[i], 0);
-
   const slope = (sumW * sumWXY - sumWX * sumWY) / (sumW * sumWXX - sumWX * sumWX);
   const intercept = (sumWY - slope * sumWX) / sumW;
+  const regressionPrediction = slope * (window - 1 + PREDICTION_DAYS) + intercept;
 
-  // Momentum adjustment: compare last 5 days avg vs previous 10 days avg
+  // --- Technical Indicators ---
+  const ma5 = calcSMA(y, Math.min(5, y.length));
+  const ma10 = calcSMA(y, Math.min(10, y.length));
+  const ma20 = calcSMA(y, Math.min(20, y.length));
+  const rsiVals = calcRSI(y);
+  const macdObj = calcMACD(y);
+  const bollingerPos = calcBollingerPosition(y);
+  const atr = calcATR(y_highs, y_lows, y, 14);
+  const volTrend = volumes.length > 0 ? calcVolumeTrend(prices, volumes) : 0;
+
+  // Current values of indicators
+  const curMA5 = ma5[ma5.length - 1] || currentPrice;
+  const curMA10 = ma10[ma10.length - 1] || currentPrice;
+  const curMA20 = ma20[ma20.length - 1] || currentPrice;
+  const curRSI = rsiVals[rsiVals.length - 1] || 50;
+  const curMACD = macdObj.macdLine[macdObj.macdLine.length - 1] || 0;
+  const curSignal = macdObj.signal[macdObj.signal.length - 1] || 0;
+  const curHist = macdObj.histogram[macdObj.histogram.length - 1] || 0;
+
+  // --- Trend analysis ---
+  // MA alignment score: bullish if MA5 > MA10 > MA20
+  const trendScore = (curMA5 > curMA10 ? 1 : 0) + (curMA10 > curMA20 ? 1 : 0)
+    + (currentPrice > curMA5 ? 1 : 0) - 1.5;
+  // trendScore: positive = bullish, negative = bearish, ~0 = neutral
+
+  // --- Momentum from recent price ---
   const recent5 = prices.slice(-5).reduce((a, b) => a + b, 0) / 5;
   const prior10 = prices.slice(-15, -5).reduce((a, b) => a + b, 0) / 10;
   const momentum = (recent5 - prior10) / prior10;
 
-  // Predicted price = linear regression + momentum boost
-  const basePrediction = slope * (window - 1 + days) + intercept;
-  const momentumAdjustment = basePrediction * momentum * 0.3;
-  const predictedPrice = basePrediction + momentumAdjustment;
+  // --- RSI analysis ---
+  const rsiBias = curRSI > 70 ? -0.08 : curRSI < 30 ? 0.08 : (curRSI - 50) / 625;
 
-  // Current price = last close
-  const currentPrice = prices[n - 1];
+  // --- MACD analysis ---
+  const macdBias = curHist > 0 ? 0.015 : -0.015;
 
-  // R-squared (fit quality)
+  // --- Bollinger Bands analysis ---
+  const bollingerBias = -bollingerPos * 0.02;
+
+  // --- Volume trend analysis ---
+  const volBias = volTrend * 0.015;
+
+  // --- Combine signals ---
+  // Base prediction from regression
+  const trendFactor = trendScore * 0.02;
+  const momentumFactor = momentum * 0.25;
+  const combinedReturn = trendFactor + momentumFactor + rsiBias + macdBias + bollingerBias + volBias;
+  const predictedPrice = regressionPrediction * (1 + combinedReturn);
+
+  // --- Confidence score (0-95) ---
+  // R-squared of regression
   const meanY = y.reduce((a, b) => a + b, 0) / window;
   const ssRes = y.reduce((s, yi, i) => {
     const fit = slope * x[i] + intercept;
@@ -143,27 +371,84 @@ function predictPrice(prices, days = PREDICTION_DAYS) {
   }
   const meanRet = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
   const variance = dailyReturns.reduce((s, r) => s + (r - meanRet) ** 2, 0) / dailyReturns.length;
-  const volatility = Math.sqrt(variance) * Math.sqrt(252); // annualized
+  const volatility = Math.sqrt(variance) * Math.sqrt(252);
 
-  // Confidence score (0-100)
-  const r2Score = Math.min(rSquared * 100, 40);
-  const volScore = Math.max(0, 30 - volatility * 100 * 6);
-  const dataScore = Math.min((n / HISTORY_DAYS) * 20, 20);
-  const trendScore = Math.abs(momentum) < 0.05 ? 10 : 5;
-  const confidence = Math.min(Math.round(r2Score + volScore + dataScore + trendScore), 95);
+  // Indicator agreement score
+  const regDir = slope > 0 ? 1 : -1;
+  const maDir = trendScore > 0.5 ? 1 : trendScore < -0.5 ? -1 : 0;
+  const macdDir = curHist > 0 ? 1 : -1;
+  const rsiDir = curRSI > 50 ? 1 : -1;
+  const volDir = volTrend > 0.001 ? 1 : volTrend < -0.001 ? -1 : 0;
+  const bollingerConfirm = (bollingerPos < -0.5 && regDir > 0) || (bollingerPos > 0.5 && regDir < 0) ? 1 : 0;
+  const agreeScore =
+    (regDir === maDir ? 4 : 0) +
+    (regDir === macdDir ? 4 : 0) +
+    (regDir === rsiDir ? 4 : 0) +
+    (volDir === regDir && volDir !== 0 ? 4 : 0) +
+    (bollingerConfirm ? 4 : 0);
+
+  // MA trend strength: all aligned = stronger trend
+  const maAligned = (curMA5 > curMA10 && curMA10 > curMA20) || (curMA5 < curMA10 && curMA10 < curMA20);
+  const maStrength = maAligned ? 5 : 0;
+
+  // Ensemble: three models agreement (regression, momentum, mean-reversion)
+  const momentumModel = currentPrice * (1 + momentum * PREDICTION_DAYS);
+  const momentumPredUp = momentumModel > currentPrice;
+  const reversionStrength = (currentPrice - curMA20) / curMA20;
+  const reversionModel = currentPrice * (1 - reversionStrength * 0.3);
+  const reversionPredUp = reversionModel > currentPrice;
+  const modelsUp = [regDir > 0, momentumPredUp, reversionPredUp];
+  const upCount = modelsUp.filter(Boolean).length;
+  const ensembleAgreement = upCount >= 2 ? (upCount === 3 ? 8 : 4) : 0;
+
+  // Prediction interval tightness (80% CI width vs current price)
+  const ssX = window * (window - 1) / 2;
+  const ssX2 = (window - 1) * window * (2 * window - 1) / 6;
+  const ssxx = ssX2 - ssX * ssX / window;
+  const stdError = Math.sqrt(ssRes / Math.max(window - 2, 1));
+  const predStdErr = stdError * Math.sqrt(1 + 1 / window + Math.pow(PREDICTION_DAYS, 2) / ssxx);
+  const intervalWidth = (predStdErr * 1.282) / currentPrice;
+  const intervalScore = intervalWidth < 0.05 ? 7 : intervalWidth < 0.10 ? 4 : intervalWidth < 0.15 ? 2 : 0;
+
+  // Use ATR-based volatility if available for better risk measure
+  const effVol = atr > 0 ? atr / currentPrice * Math.sqrt(252) : volatility;
+  const r2Score = Math.min(rSquared * 20, 20);
+  const volScore = Math.max(0, 15 - effVol * 100.0 * 5.0);
+  const dataScore = Math.min((n / HISTORY_DAYS) * 10, 10);
+  const confidence = Math.min(Math.round(r2Score + volScore + dataScore + agreeScore + maStrength + ensembleAgreement + intervalScore), 95);
+
+  // Pre-compute daily volatility and multi-timeframe predictions
+  const dailyVol = Math.sqrt(variance);
+  const pred1d = calcTimeframePrediction(currentPrice, slope, intercept, window, combinedReturn, 1);
+  const pred5d = calcTimeframePrediction(currentPrice, slope, intercept, window, combinedReturn, 5);
+  const pred15d = calcTimeframePrediction(currentPrice, slope, intercept, window, combinedReturn, 15);
+  const preds = { '1d': pred1d, '5d': pred5d, '15d': pred15d };
 
   return {
     currentPrice,
     predictedPrice,
     change: predictedPrice - currentPrice,
     changePercent: ((predictedPrice - currentPrice) / currentPrice) * 100,
+    predictions: preds,
+    risk: {
+      probabilityUp: Math.round(calcProbabilityUp(curRSI, trendScore, curHist, momentum, slope)),
+      annualVolatility: Math.round(volatility * 1000) / 10,
+      maxDrawdown: Math.round(-dailyVol * Math.sqrt(PREDICTION_DAYS) * 1.65 * 1000) / 10,
+      valueAtRisk95: Math.round(-dailyVol * Math.sqrt(PREDICTION_DAYS) * 1.65 * 1000) / 10,
+      sharpeRatio: Math.round((preds['15d'].changePercent * (252 / PREDICTION_DAYS) / 100 - 0.03) / (volatility || 0.1) * 100) / 100,
+    },
     confidence: Math.max(confidence, 10),
     rSquared,
     volatility,
     momentum,
     slope,
-    predictedDates: Array.from({ length: days }, (_, i) => i + 1),
-    predictedPrices: Array.from({ length: days }, (_, i) => slope * (window - 1 + i + 1) + intercept + (momentumAdjustment / days) * (i + 1)),
+     rsi: curRSI,
+     predictedDates: Array.from({ length: PREDICTION_DAYS }, (_, i) => i + 1),
+     predictedPrices: Array.from({ length: PREDICTION_DAYS }, (_, i) => {
+       const dayRatio = (i + 1) / PREDICTION_DAYS;
+       const regPrice = slope * (window - 1 + i + 1) + intercept;
+       return regPrice * (1 + combinedReturn * dayRatio);
+     }),
   };
 }
 
@@ -208,6 +493,10 @@ async function fetchStockData(ticker) {
 
   const dates = [];
   const prices = [];
+  const opens = [];
+  const highs = [];
+  const lows = [];
+  const volumes = [];
 
   for (let i = 0; i < timestamps.length; i++) {
     const close = adjClose ? adjClose[i] : quotes.close[i];
@@ -215,6 +504,10 @@ async function fetchStockData(ticker) {
       const d = new Date(timestamps[i] * 1000);
       dates.push(d);
       prices.push(close);
+      opens.push(quotes.open[i]);
+      highs.push(quotes.high[i]);
+      lows.push(quotes.low[i]);
+      volumes.push(quotes.volume[i]);
     }
   }
 
@@ -226,7 +519,7 @@ async function fetchStockData(ticker) {
     });
   }
 
-  return { ticker, dates, prices, dailyChanges };
+  return { ticker, dates, prices, opens, highs, lows, volumes, dailyChanges };
 }
 
 /* ============================================================
@@ -251,23 +544,48 @@ function generateFallbackData(ticker) {
     '300274.SZ': 70, '000725.SZ': 4, '300498.SZ': 18,
     '002459.SZ': 15, '688981.SH': 55, '000063.SZ': 28,
     '600690.SS': 28, '002555.SZ': 22, '002129.SZ': 20,
-    '002230.SZ': 45, '002304.SZ': 85, '000568.SZ': 180,
   };
 
   const base = basePrices[ticker] || 100;
+
+  // Deterministic generation: use ticker hash as seed
+  let seed = hashTicker(ticker);
   const prices = [];
   const dates = [];
+  const opens = [];
+  const highs = [];
+  const lows = [];
+  const volumes = [];
   const now = new Date();
-  let price = base * (0.9 + Math.random() * 0.2);
+
+  // Start from base price with a consistent offset
+  const norm = seed / 2147483647;
+  let price = base * (0.88 + norm * 0.24);
+
+  // Generate a consistent trend direction from ticker hash
+  const trendDrift = (norm - 0.5) * 0.002; // slight daily drift
+  const volScale = 0.008 + norm * 0.025; // consistent volatility
 
   for (let i = HISTORY_DAYS; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    // Skip weekends
     if (d.getDay() === 0 || d.getDay() === 6) continue;
 
-    price = price * (1 + (Math.random() - 0.48) * 0.03);
+    // Deterministic "random" step using the LCG
+    const rn = nextRandom(seed);
+    seed = rn.state;
+    const step = (rn.value - 0.5) * volScale * 2;
+
+    price = price * (1 + trendDrift + step);
+    const open = prices.length > 0 ? prices[prices.length - 1] : price;
+    const high = price * (1 + Math.abs(step) * 0.5);
+    const low = price * (1 - Math.abs(step) * 0.5);
+    const volume = Math.round((5 + norm * 15) * 100000);
     prices.push(price);
+    opens.push(open);
+    highs.push(high);
+    lows.push(low);
+    volumes.push(volume);
     dates.push(d);
   }
 
@@ -279,20 +597,34 @@ function generateFallbackData(ticker) {
     });
   }
 
-  return { ticker, dates, prices, dailyChanges };
+  return { ticker, dates, prices, opens, highs, lows, volumes, dailyChanges };
 }
 
 /* ============================================================
    LOAD & PREDICT
    ============================================================ */
 
-async function loadAndPredict(ticker, stockInfo) {
+  async function loadAndPredict(ticker, stockInfo) {
+  // Check localStorage cache first (instant on same-day reload)
+  const cached = loadCachedData(ticker);
+  if (cached) {
+    stockDataMap.set(ticker, cached);
+    const pred = predictPrice(cached);
+    if (pred) {
+      pred.ticker = ticker;
+      pred.stockName = stockInfo?.name || ticker;
+      pred.targetDate = new Date();
+      pred.targetDate.setDate(pred.targetDate.getDate() + PREDICTION_DAYS);
+      predictions.set(ticker, pred);
+    }
+    return { data: cached, prediction: pred };
+  }
   // Skip API call if running locally (file:// protocol)
   if (window.location.protocol === 'file:') {
     console.log('Local mode detected, using simulated data');
     const fallbackData = generateFallbackData(ticker);
     stockDataMap.set(ticker, fallbackData);
-    const localPred = predictPrice(fallbackData.prices);
+    const localPred = predictPrice(fallbackData);
     if (localPred) {
       localPred.ticker = ticker;
       localPred.stockName = stockInfo?.name || ticker;
@@ -312,16 +644,116 @@ async function loadAndPredict(ticker, stockInfo) {
 
   stockDataMap.set(ticker, data);
 
-  const pred = predictPrice(data.prices);
+  const pred = predictPrice(data);
   if (pred) {
     pred.ticker = ticker;
     pred.stockName = stockInfo?.name || ticker;
     pred.targetDate = new Date();
     pred.targetDate.setDate(pred.targetDate.getDate() + PREDICTION_DAYS);
     predictions.set(ticker, pred);
+    saveCachedData(ticker, data);
   }
 
-  return { data, prediction: pred };
+   return { data, prediction: pred };
+}
+
+/* ============================================================
+   COMPARE VIEW
+   ============================================================ */
+
+const COMPARE_METRICS = [
+  { key: '15d预测', fn: (p) => '¥' + formatPrice(p.predictedPrice), better: 'higher' },
+  { key: '涨跌幅', fn: (p) => formatPercent(p.changePercent), better: 'higher' },
+  { key: '上涨概率', fn: (p) => p.risk ? p.risk.probabilityUp + '%' : '--', better: 'higher' },
+  { key: '最大回撤', fn: (p) => p.risk ? p.risk.maxDrawdown + '%' : '--', better: 'higher' },
+  { key: '夏普比率', fn: (p) => p.risk ? p.risk.sharpeRatio : '--', better: 'higher' },
+  { key: '波动率', fn: (p) => p.risk ? p.risk.annualVolatility + '%' : '--', better: 'lower' },
+  { key: '可信度', fn: (p) => p.confidence + '%', better: 'higher' },
+];
+
+function toggleCompare(ticker) {
+  const idx = compareList.indexOf(ticker);
+  if (idx > -1) {
+    compareList.splice(idx, 1);
+  } else {
+    if (compareList.length >= 2) compareList.shift();
+    compareList.push(ticker);
+  }
+  renderCards();
+  updateCompareBadge();
+}
+
+function updateCompareBadge() {
+  const badge = document.getElementById('compareBadge');
+  if (!badge) return;
+  const tickersEl = document.getElementById('compareTickers');
+  if (compareList.length === 2) {
+    const names = compareList.map(t => {
+      const info = STOCKS.find(s => s.ticker === t);
+      return info ? info.name : t;
+    });
+    tickersEl.textContent = names.join(' vs ');
+    badge.classList.add('active');
+  } else {
+    badge.classList.remove('active');
+  }
+}
+
+function openCompare() {
+  if (compareList.length !== 2) return;
+  const p1 = predictions.get(compareList[0]);
+  const p2 = predictions.get(compareList[1]);
+  if (!p1 || !p2) return;
+  const info1 = STOCKS.find(s => s.ticker === compareList[0]) || { name: compareList[0], ticker: compareList[0] };
+  const info2 = STOCKS.find(s => s.ticker === compareList[1]) || { name: compareList[1], ticker: compareList[1] };
+  document.getElementById('c1Name').textContent = info1.name;
+  document.getElementById('c1Ticker').textContent = compareList[0];
+  document.getElementById('c1Price').textContent = '¥' + formatPrice(p1.currentPrice);
+  document.getElementById('c2Name').textContent = info2.name;
+  document.getElementById('c2Ticker').textContent = compareList[1];
+  document.getElementById('c2Price').textContent = '¥' + formatPrice(p2.currentPrice);
+  const c1m = document.getElementById('c1Metrics');
+  const c2m = document.getElementById('c2Metrics');
+  let h1 = '', h2 = '', win1 = 0, win2 = 0;
+  COMPARE_METRICS.forEach(m => {
+    const v1 = m.fn(p1), v2 = m.fn(p2);
+    let c1 = '', c2 = '';
+    if (m.better && v1 !== '--' && v2 !== '--') {
+      const n1 = parseFloat(v1), n2 = parseFloat(v2);
+      if (!isNaN(n1) && !isNaN(n2)) {
+        if (m.better === 'higher') {
+          if (n1 > n2) win1++; else if (n2 > n1) win2++;
+          c1 = n1 > n2 ? 'better' : n1 < n2 ? 'worse' : '';
+          c2 = n2 > n1 ? 'better' : n2 < n1 ? 'worse' : '';
+        } else {
+          if (n1 < n2) win1++; else if (n2 < n1) win2++;
+          c1 = n1 < n2 ? 'better' : n1 > n2 ? 'worse' : '';
+          c2 = n2 < n1 ? 'better' : n2 > n1 ? 'worse' : '';
+        }
+      }
+    }
+    h1 += '<div class="compare-row"><span class="c-label">' + m.key + '</span><span class="c-value ' + c1 + '">' + v1 + '</span></div>';
+    h2 += '<div class="compare-row"><span class="c-label">' + m.key + '</span><span class="c-value ' + c2 + '">' + v2 + '</span></div>';
+  });
+  c1m.innerHTML = h1;
+  c2m.innerHTML = h2;
+  // Highlight best pick with green border + badge
+  const col1 = document.getElementById('compareCol1');
+  const col2 = document.getElementById('compareCol2');
+  col1.classList.remove('recommended');
+  col2.classList.remove('recommended');
+  let b1 = document.getElementById('c1Recommend');
+  let b2 = document.getElementById('c2Recommend');
+  if (!b1) { b1 = document.createElement('div'); b1.id = 'c1Recommend'; b1.className = 'c-recommend'; document.querySelector('#compareCol1 .compare-col-header').appendChild(b1); }
+  if (!b2) { b2 = document.createElement('div'); b2.id = 'c2Recommend'; b2.className = 'c-recommend'; document.querySelector('#compareCol2 .compare-col-header').appendChild(b2); }
+  b1.textContent = ''; b2.textContent = '';
+  if (win1 > win2) { col1.classList.add('recommended'); b1.textContent = '推荐'; }
+  else if (win2 > win1) { col2.classList.add('recommended'); b2.textContent = '推荐'; }
+  document.getElementById('compareOverlay').classList.add('active');
+}
+
+function closeCompare() {
+  document.getElementById('compareOverlay').classList.remove('active');
 }
 
 /* ============================================================
@@ -362,14 +794,25 @@ function renderCards() {
 
     if (!pred) {
       return `
-        <div class="stock-card" data-ticker="${ticker}" style="animation-delay:${idx * 0.04}s">
+        <div class="stock-card sk-card" data-ticker="${ticker}">
           <div class="card-header">
-            <span class="stock-name">${info.name}</span>
-            <span class="stock-ticker">${ticker}</span>
+            <div class="sk sk-line sk-name"></div>
+            <div class="sk sk-tick"></div>
           </div>
-          <div class="error-message" style="padding: 20px 0">
-            <span class="error-icon">&#9203;</span>
-            <p>加载中...</p>
+          <div class="card-body">
+            <div class="sk-block price-sk">
+              <div class="sk sk-lg"></div>
+              <div class="sk sk-sm" style="width:40%"></div>
+            </div>
+            <div class="sk-block pred-sk">
+              <div class="sk sk-xs"></div>
+              <div class="sk sk-md"></div>
+              <div class="sk sk-sm" style="width:50%"></div>
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="sk sk-bar"></div>
+            <div class="sk sk-xs" style="width:30%"></div>
           </div>
         </div>
       `;
@@ -384,6 +827,7 @@ function renderCards() {
     return `
       <div class="stock-card" data-ticker="${ticker}" style="animation-delay:${idx * 0.04}s">
         <div class="trend-indicator ${trendCls}"></div>
+        <button class="compare-btn-card" onclick="event.stopPropagation(); toggleCompare('${ticker}')" title="加入对比">+</button>
         <button class="remove-btn" onclick="removeStock('${ticker}')" title="移除">&#10005;</button>
         <div class="card-header">
           <span class="stock-name">${info.name}</span>
@@ -402,6 +846,10 @@ function renderCards() {
             <div class="predicted-change ${trendCls}">
               ${formatPercent(pred.changePercent)}
             </div>
+            <div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;display:flex;gap:8px;justify-content:flex-end;">
+              <span>明日 ${pred.predictions ? formatPercent(pred.predictions['1d'].changePercent) : '--'}</span>
+              <span>5日 ${pred.predictions ? formatPercent(pred.predictions['5d'].changePercent) : '--'}</span>
+            </div>
           </div>
         </div>
         <div class="card-footer">
@@ -412,7 +860,12 @@ function renderCards() {
             </div>
             <span>${conf.label}</span>
           </div>
-          <div class="prediction-date">&#128197; ${predDateStr}</div>
+          <div style="font-size:0.72rem;color:var(--text-muted);">&#128197; ${predDateStr}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-secondary);margin-top:8px;padding-top:8px;border-top:1px solid var(--border-color);">
+          <span>上涨概率 <span style="font-weight:600;color:${pred.risk && pred.risk.probabilityUp > 50 ? 'var(--accent-green)' : 'var(--accent-red)'}">${pred.risk ? pred.risk.probabilityUp + '%' : '--'}</span></span>
+          <span>波动率 ${pred.risk ? pred.risk.annualVolatility + '%' : '--'}</span>
+          <span>最大回撤 <span style="color:var(--accent-red)">${pred.risk ? pred.risk.maxDrawdown + '%' : '--'}</span></span>
         </div>
         <div class="loading-overlay"><div class="spinner"></div></div>
       </div>
@@ -450,7 +903,9 @@ function updateStatus() {
   const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
 
   if (isRefreshing) {
-    el.innerHTML = '<span class="dot loading"></span> 更新中...';
+    const loaded = predictions.size;
+    const total = activeTickers.length;
+    el.innerHTML = '<span class="dot loading"></span> 加载中 ' + loaded + '/' + total;
     return;
   }
 
@@ -487,11 +942,21 @@ function openDetail(ticker) {
 
   document.getElementById('modalTitle').innerHTML = `${info.name} <span class="ticker">(${ticker})</span>`;
   document.getElementById('modalCurrentPrice').textContent = `¥${formatPrice(pred.currentPrice)}`;
+  document.getElementById('modalPred1d').textContent = (pred.predictions ? '¥' + formatPrice(pred.predictions['1d'].price) + ' (' + formatPercent(pred.predictions['1d'].changePercent) + ')' : '--');
+  document.getElementById('modalPred5d').textContent = (pred.predictions ? '¥' + formatPrice(pred.predictions['5d'].price) + ' (' + formatPercent(pred.predictions['5d'].changePercent) + ')' : '--');
   document.getElementById('modalPredictedPrice').textContent = `¥${formatPrice(pred.predictedPrice)}`;
   document.getElementById('modalChange').textContent = formatPercent(pred.changePercent);
   document.getElementById('modalChange').className = `stat-value ${trendCls}`;
   document.getElementById('modalConfidence').textContent = `${pred.confidence}% (${conf.label})`;
   document.getElementById('modalVolatility').textContent = `${(pred.volatility * 100).toFixed(1)}%`;
+  document.getElementById('modalProbUp').textContent = (pred.risk ? pred.risk.probabilityUp + '%' : '--');
+  document.getElementById('modalProbUp').className = 'stat-value ' + (pred.risk && pred.risk.probabilityUp > 50 ? 'up' : 'down');
+  document.getElementById('modalMaxDrawdown').textContent = (pred.risk ? pred.risk.maxDrawdown + '%' : '--');
+  document.getElementById('modalMaxDrawdown').className = 'stat-value down';
+  document.getElementById('modalSharpe').textContent = (pred.risk ? pred.risk.sharpeRatio : '--');
+  document.getElementById('modalSharpe').className = 'stat-value ' + (pred.risk && pred.risk.sharpeRatio > 0.5 ? 'up' : (pred.risk && pred.risk.sharpeRatio > 0 ? '' : 'down'));
+  document.getElementById('modalVaR').textContent = (pred.risk ? pred.risk.valueAtRisk95 + '%' : '--');
+  document.getElementById('modalVaR').className = 'stat-value down';
 
   overlay.classList.add('active');
 
@@ -664,12 +1129,12 @@ async function refreshAll() {
         })
     );
     await Promise.all(promises);
-    renderCards();
     // Small delay between batches
     if (i + batchSize < activeTickers.length) {
       await new Promise(r => setTimeout(r, 500));
     }
   }
+  renderCards();
 
   isRefreshing = false;
   if (btn) btn.disabled = false;
@@ -734,6 +1199,7 @@ function addStock(ticker) {
   if (!exists) return;
 
   activeTickers.push(ticker);
+  saveCachedTickers(activeTickers);
   document.getElementById('searchInput').value = '';
   document.getElementById('searchSuggestions').classList.remove('active');
 
@@ -761,6 +1227,7 @@ function removeStock(ticker) {
   } else {
     renderCards();
   }
+  saveCachedTickers(activeTickers);
 }
 
 /* ============================================================
@@ -768,6 +1235,10 @@ function removeStock(ticker) {
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
+  const savedTickers = loadCachedTickers();
+  if (savedTickers && savedTickers.length > 0) {
+    activeTickers = savedTickers;
+  }
   initSearch();
   renderCards();
   refreshAll();
@@ -785,6 +1256,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Refresh button
   document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+  document.getElementById('compareBtn').addEventListener('click', openCompare);
+  document.getElementById('compareClearBtn').addEventListener('click', () => { compareList = []; renderCards(); updateCompareBadge(); });
+  document.getElementById('compareCloseBtn').addEventListener('click', closeCompare);
+  document.getElementById('compareOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeCompare(); });
 });
 
 /* ============================================================
@@ -795,3 +1270,6 @@ window.addStock = addStock;
 window.removeStock = removeStock;
 window.openDetail = openDetail;
 window.closeDetail = closeDetail;
+window.toggleCompare = toggleCompare;
+window.openCompare = openCompare;
+window.closeCompare = closeCompare;
